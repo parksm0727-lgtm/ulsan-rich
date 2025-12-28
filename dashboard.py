@@ -37,14 +37,13 @@ encoding_opt = st.sidebar.radio(
     help="한글이 외계어처럼 보이면 utf-8을 선택하세요."
 )
 
-# 3. 데이터 로드 함수 (에러 처리 강화)
+# 3. 데이터 로드 함수
 @st.cache_data
 def load_data(file, skip_n, enc):
     try:
         # 설정된 옵션으로 읽기 시도
         df = pd.read_csv(file, encoding=enc, skiprows=skip_n)
-        
-        # 컬럼명 앞뒤 공백 제거 (매우 중요)
+        # 컬럼명 앞뒤 공백 제거
         df.columns = df.columns.str.strip()
         return df
     except UnicodeDecodeError:
@@ -79,7 +78,7 @@ with st.expander("🔍 데이터 원본 미리보기 (여기를 눌러 확인)",
     # 필수 컬럼 체크
     required_cols = ['시군구', '단지명', '전용면적(㎡)', '계약년월', '계약일', '거래금액(만원)']
     
-    # [수정] 코드가 잘리지 않도록 안전하게 작성
+    # [안전 수정] 리스트 컴프리헨션 대신 풀어서 작성
     missing_cols = []
     for col in required_cols:
         if col not in raw_df.columns:
@@ -152,5 +151,79 @@ with c3:
     selected_apt = st.selectbox("3. 아파트", apt_list)
 
 with c4:
-    # 해당 아파트의 평수만 추출
-    area_list = df[(df['동이름'] == selected_dong) & (df['단지명'] == selected_apt)]['전용면적(
+    # [안전 수정] 코드가 길어서 잘리지 않도록 변수로 분리하여 작성
+    # 1. 해당 아파트 데이터만 먼저 필터링
+    apt_data = df[
+        (df['동이름'] == selected_dong) & 
+        (df['단지명'] == selected_apt)
+    ]
+    
+    # 2. 평수 목록 추출
+    area_list = sorted(apt_data['전용면적(㎡)'].unique())
+    
+    def format_area(area):
+        pyeong = area / 3.3058
+        return f"{area}㎡ ({pyeong:.1f}평)"
+        
+    selected_area = st.selectbox("4. 평수", area_list, format_func=format_area)
+
+# 최종 데이터 필터링
+target_df = df[
+    (df['동이름'] == selected_dong) & 
+    (df['단지명'] == selected_apt) & 
+    (df['전용면적(㎡)'] == selected_area)
+].sort_values('계약일자')
+
+# 결과 표시
+pyeong_val = selected_area / 3.3058
+st.subheader(f"📍 {selected_apt} {pyeong_val:.1f}평형 분석 결과")
+
+if len(target_df) < 5:
+    st.warning(f"⚠️ 거래 내역이 {len(target_df)}건 뿐입니다. 데이터가 너무 적어 AI 예측이 불가능합니다.")
+    chart = alt.Chart(target_df).mark_circle(size=60).encode(
+        x='계약일자', y=alt.Y('거래금액', scale=alt.Scale(zero=False)), tooltip=['계약일자', '거래금액']
+    ).interactive()
+    st.altair_chart(chart, use_container_width=True)
+else:
+    # 예측 버튼
+    if st.button("🤖 미래 가격 예측하기 (클릭)", type="primary"):
+        with st.spinner("AI가 분석 중입니다..."):
+            # 학습
+            target_df['date_ord'] = target_df['계약일자'].map(datetime.toordinal)
+            X = target_df[['date_ord']]
+            y = target_df['거래금액']
+            
+            model = LinearRegression()
+            model.fit(X, y)
+            
+            # 예측 (6개월)
+            last_date = target_df['계약일자'].max()
+            future_dates = [last_date + pd.Timedelta(days=x) for x in range(15, 180, 15)]
+            future_ord = np.array([d.toordinal() for d in future_dates]).reshape(-1, 1)
+            predictions = model.predict(future_ord)
+            
+            future_df = pd.DataFrame({'계약일자': future_dates, '예측가격': predictions.astype(int)})
+            
+            # 차트 (과거+미래)
+            base = alt.Chart(target_df).mark_circle(color='#1f77b4', size=60).encode(
+                x='계약일자', y=alt.Y('거래금액', scale=alt.Scale(zero=False), title='가격(만원)'),
+                tooltip=['계약일자', '거래금액']
+            )
+            pred = alt.Chart(future_df).mark_line(color='#ff7f0e', strokeDash=[5, 5]).encode(
+                x='계약일자', y='예측가격', tooltip=['계약일자', '예측가격']
+            )
+            
+            st.altair_chart(base + pred, use_container_width=True)
+            
+            # 코멘트
+            diff = future_df.iloc[-1]['예측가격'] - target_df.iloc[-1]['거래금액']
+            diff_text = f"{abs(diff)/10000:.2f}억원" if abs(diff) >= 10000 else f"{abs(diff)}만원"
+            direction = "상승" if diff > 0 else "하락"
+            st.success(f"📈 분석 결과: 현재 추세가 지속된다면 6개월 뒤 약 **{diff_text} {direction}** 할 가능성이 있습니다.")
+    else:
+        # 기본 차트
+        chart = alt.Chart(target_df).mark_circle(size=60).encode(
+            x='계약일자', y=alt.Y('거래금액', scale=alt.Scale(zero=False)), tooltip=['계약일자', '거래금액']
+        ).interactive()
+        st.altair_chart(chart, use_container_width=True)
+        st.caption("위 버튼을 누르면 미래 예측선이 표시됩니다.")
