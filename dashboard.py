@@ -11,27 +11,32 @@ st.set_page_config(page_title="울산 부동산 AI 분석기", page_icon="🔮",
 st.title("🔮 울산 아파트 미래 가격 예측")
 st.markdown("과거 데이터를 학습하여 **향후 6개월간의 가격 추세**를 예측합니다.")
 
-# 2. 데이터 로드
+# 2. 데이터 로드 (수정 버전)
+# 사이드바에서 파일을 직접 업로드하도록 변경
+uploaded_file = st.sidebar.file_uploader("📂 데이터 파일 업로드 (CSV)", type="csv")
+
 @st.cache_data
-def load_data():
-    file_path = 'ulsan_data.csv'
+def load_data(file):
     try:
-        df = pd.read_csv(file_path, encoding='cp949', skiprows=15)
+        # 업로드된 파일 객체를 바로 읽습니다
+        df = pd.read_csv(file, encoding='cp949', skiprows=15)
         df.columns = df.columns.str.strip()
         df['거래금액'] = df['거래금액(만원)'].astype(str).str.replace(',', '').astype(int)
         df['동이름'] = df['시군구'].apply(lambda x: x.split(' ')[-1])
-        # 날짜 변환 (YYYYMM -> datetime)
         df['계약일자'] = pd.to_datetime(df['계약년월'].astype(str) + df['계약일'].astype(str).str.zfill(2), format='%Y%m%d')
         return df
     except Exception as e:
         return None
 
-df = load_data()
-
-if df is None:
-    st.error("데이터 파일을 찾을 수 없습니다.")
-    st.stop()
-
+# 파일이 업로드되었을 때만 로직 실행
+if uploaded_file is not None:
+    df = load_data(uploaded_file)
+    if df is None:
+        st.error("데이터 형식이 올바르지 않습니다.")
+        st.stop()
+else:
+    st.info("좌측 사이드바에서 'ulsan_data.csv' 파일을 업로드해주세요.")
+    st.stop() # 파일이 없으면 여기서 멈춤
 # 3. 사이드바: 아파트 선택
 st.sidebar.header("🎯 분석 대상 선택")
 gu_list = df['시군구'].apply(lambda x: x.split(' ')[1]).unique()
@@ -113,3 +118,4 @@ else:
                 st.write(f"📉 현재 추세가 꺾이고 있습니다. 6개월 뒤 약 **{abs(diff)/10000:.1f}억원 하락**하거나 조정받을 수 있습니다.")
 
                 st.info("※ 주의: 이 예측은 과거 데이터의 '추세'만 반영한 결과입니다. 실제 시장 상황(금리 등)에 따라 달라질 수 있습니다.")
+
