@@ -30,12 +30,19 @@ skip_rows = st.sidebar.number_input(
     help="국토부 원본 파일은 보통 15줄의 설명이 있습니다. 가공된 파일은 0으로 설정하세요."
 )
 
-encoding_opt = st.sidebar.radio(
+# [수정된 부분] 사용자에게는 친절하게 보여주고, 코드에는 정확한 값을 전달하도록 분리
+encoding_label = st.sidebar.radio(
     "파일 인코딩 (글자 깨짐 해결)", 
     ["cp949 (Windows기본)", "utf-8"], 
     index=0,
     help="한글이 외계어처럼 보이면 utf-8을 선택하세요."
 )
+
+# 선택된 라벨을 실제 인코딩 코드로 변환
+if "cp949" in encoding_label:
+    encoding_opt = "cp949"
+else:
+    encoding_opt = "utf-8"
 
 # 3. 데이터 로드 함수
 @st.cache_data
