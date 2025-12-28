@@ -8,166 +8,107 @@ from datetime import datetime
 # 1. 페이지 설정
 st.set_page_config(page_title="울산 부동산 AI 분석기", page_icon="🔮", layout="wide")
 
-st.title("🔮 울산 아파트 시장 동향 & AI 예측")
-st.markdown("데이터의 띄어쓰기가 달라도 정확하게 **구/군**을 찾아내도록 개선된 버전입니다.")
+st.title("🔮 울산 아파트 미래 가격 예측")
+st.markdown("과거 데이터를 학습하여 **향후 6개월간의 가격 추세**를 예측합니다.")
 
-# 2. 사이드바: 파일 업로드 및 설정
-st.sidebar.header("📂 데이터 파일 & 설정")
-uploaded_file = st.sidebar.file_uploader("CSV 파일을 업로드해주세요", type=['csv'])
-
-st.sidebar.markdown("---")
-skip_rows = st.sidebar.number_input("상단 제외 행 수 (기본값: 15)", min_value=0, value=15)
-encoding_label = st.sidebar.radio("파일 인코딩", ["cp949 (Windows기본)", "utf-8"], index=0)
-encoding_opt = "cp949" if "cp949" in encoding_label else "utf-8"
-
+# 2. 데이터 로드
 @st.cache_data
-def load_data(file, skip_n, enc):
+def load_data():
+    file_path = 'c:/tistory_auto/ulsan_data.csv'
     try:
-        df = pd.read_csv(file, encoding=enc, skiprows=skip_n)
-        df.columns = df.columns.str.strip() 
+        df = pd.read_csv(file_path, encoding='cp949', skiprows=15)
+        df.columns = df.columns.str.strip()
+        df['거래금액'] = df['거래금액(만원)'].astype(str).str.replace(',', '').astype(int)
+        df['동이름'] = df['시군구'].apply(lambda x: x.split(' ')[-1])
+        # 날짜 변환 (YYYYMM -> datetime)
+        df['계약일자'] = pd.to_datetime(df['계약년월'].astype(str) + df['계약일'].astype(str).str.zfill(2), format='%Y%m%d')
         return df
     except Exception as e:
-        return str(e)
+        return None
 
-if uploaded_file is None:
-    st.info("👈 좌측 사이드바에서 데이터 파일(CSV)을 업로드해주세요.")
+df = load_data()
+
+if df is None:
+    st.error("데이터 파일을 찾을 수 없습니다.")
     st.stop()
 
-raw_df = load_data(uploaded_file, skip_rows, encoding_opt)
+# 3. 사이드바: 아파트 선택
+st.sidebar.header("🎯 분석 대상 선택")
+gu_list = df['시군구'].apply(lambda x: x.split(' ')[1]).unique()
+selected_gu = st.sidebar.selectbox("1. 구/군", gu_list, index=0)
 
-if isinstance(raw_df, str): 
-    st.error(f"파일 읽기 오류: {raw_df}")
-    st.stop()
+dong_list = df[df['시군구'].str.contains(selected_gu)]['동이름'].unique()
+selected_dong = st.sidebar.selectbox("2. 동네 (예: 덕하리)", dong_list)
 
-# 3. 데이터 전처리 (스마트 주소 분석 적용)
-try:
-    df = raw_df.copy()
-    
-    # (1) 거래금액: 콤마 제거
-    df['거래금액'] = df['거래금액(만원)'].astype(str).str.replace(',', '').astype(int)
-    
-    # (2) [핵심 수정] 스마트 주소 분석기
-    # 띄어쓰기가 몇 개든 상관없이 '~구', '~군'으로 끝나는 단어를 찾음
-    def find_gu(address):
-        if not isinstance(address, str): return "확인불가"
-        for part in address.split(): # 공백 기준으로 쪼개기 (이중 공백도 해결)
-            if part.endswith('구') or part.endswith('군'):
-                return part
-        return "기타" # 구/군을 못 찾은 경우
+# 해당 동네 아파트 리스트
+apt_list = df[df['동이름'] == selected_dong]['단지명'].unique()
+selected_apt = st.sidebar.selectbox("3. 아파트 단지", apt_list)
 
-    def find_dong(address):
-        if not isinstance(address, str): return ""
-        # 구/군 다음에 오는 단어를 동으로 간주하거나, '~동', '~리', '~가' 로 끝나는 말 찾기
-        for part in address.split():
-            if part.endswith('동') or part.endswith('리') or part.endswith('가'):
-                return part
-        return ""
+# 선택된 아파트 데이터 필터링
+target_df = df[(df['동이름'] == selected_dong) & (df['단지명'] == selected_apt)].sort_values('계약일자')
 
-    df['구'] = df['시군구'].apply(find_gu)
-    df['동이름'] = df['시군구'].apply(find_dong)
-    df['단지명'] = df['단지명'].astype(str).str.strip()
+# 4. 메인 화면: 분석 결과
+st.subheader(f"🏢 {selected_apt} 가격 분석")
 
-    # (3) 날짜 및 평수
-    df['계약일자'] = pd.to_datetime(df['계약년월'].astype(str) + df['계약일'].astype(str).str.zfill(2), format='%Y%m%d')
-    df['평수'] = df['전용면적(㎡)'] / 3.3058
-    df['평당가'] = df['거래금액'] / df['평수']
-
-except Exception as e:
-    st.error(f"데이터 전처리 중 문제가 발생했습니다: {e}")
-    st.dataframe(raw_df.head()) # 문제 파악을 위해 원본 표시
-    st.stop()
-
-# 4. 상단 그래프: 울산 구별 평당 가격
-st.header("📊 울산 구별 평당 가격 추이")
-
-# 그래프 데이터 만들기
-df['년월'] = df['계약일자'].dt.to_period('M').astype(str)
-trend_df = df.groupby(['년월', '구'])['평당가'].mean().reset_index()
-
-# 데이터가 비었는지 확인하는 안전장치
-if trend_df.empty:
-    st.error("🚨 그래프를 그릴 데이터가 없습니다. '시군구' 컬럼 형식을 확인해주세요.")
-    st.write("추출된 데이터 샘플:", df[['시군구', '구', '동이름']].head())
+if len(target_df) < 5:
+    st.warning("⚠️ 데이터가 너무 적어(5건 미만) 정확한 예측이 어렵습니다.")
 else:
-    # Altair 차트 그리기
-    chart = alt.Chart(trend_df).mark_line(point=True).encode(
-        x=alt.X('년월', title='기간', axis=alt.Axis(format='%Y-%m', labelAngle=-45)),
-        y=alt.Y('평당가', title='평당가(만원)', scale=alt.Scale(zero=False)),
-        color=alt.Color('구', title='구/군', scale=alt.Scale(scheme='category10')),
-        tooltip=['년월', '구', alt.Tooltip('평당가', format=',.0f')]
-    ).properties(height=350).interactive()
+    # (1) 차트 그리기
+    chart = alt.Chart(target_df).mark_circle(size=60).encode(
+        x='계약일자',
+        y=alt.Y('거래금액', title='거래금액(만원)'),
+        tooltip=['계약일자', '거래금액', '전용면적(㎡)', '층']
+    ).interactive()
     
     st.altair_chart(chart, use_container_width=True)
 
-st.divider()
+    # (2) AI 예측 버튼
+    if st.button("🤖 AI 미래 가격 예측하기"):
+        with st.spinner("AI가 과거 패턴을 분석 중입니다..."):
+            # 학습 데이터 준비 (날짜를 숫자로 변환)
+            target_df['date_ord'] = target_df['계약일자'].map(datetime.toordinal)
+            X = target_df[['date_ord']]
+            y = target_df['거래금액']
 
-# 5. 하단: 개별 분석
-st.header("🏢 개별 아파트 상세 분석")
+            # 모델 학습 (선형 회귀)
+            model = LinearRegression()
+            model.fit(X, y)
 
-col1, col2, col3, col4 = st.columns(4)
+            # 미래 날짜 생성 (오늘부터 +180일)
+            last_date = target_df['계약일자'].max()
+            future_dates = [last_date + pd.Timedelta(days=x) for x in range(0, 180, 15)]
+            future_ord = np.array([d.toordinal() for d in future_dates]).reshape(-1, 1)
 
-# 필터링 로직 (데이터가 있는 것만 보여줌)
-valid_gu = sorted([g for g in df['구'].unique() if g != "기타"])
-with col1:
-    selected_gu = st.selectbox("1. 구/군", valid_gu if valid_gu else ["데이터없음"])
+            # 예측 수행
+            predictions = model.predict(future_ord)
 
-with col2:
-    dong_list = sorted(df[df['구'] == selected_gu]['동이름'].unique())
-    selected_dong = st.selectbox("2. 동네", dong_list)
+            # 결과 데이터프레임
+            future_df = pd.DataFrame({
+                '계약일자': future_dates,
+                '예측가격': predictions.astype(int),
+                '구분': '미래예측'
+            })
 
-with col3:
-    apt_list = sorted(df[(df['구'] == selected_gu) & (df['동이름'] == selected_dong)]['단지명'].unique())
-    selected_apt = st.selectbox("3. 아파트", apt_list)
+            # 시각화 (과거 + 미래)
+            base_line = alt.Chart(target_df).mark_circle(color='blue').encode(
+                x='계약일자', y='거래금액', tooltip=['계약일자', '거래금액']
+            )
+            
+            pred_line = alt.Chart(future_df).mark_line(color='red', strokeDash=[5, 5]).encode(
+                x='계약일자', y=alt.Y('예측가격', title='가격(만원)'), tooltip=['계약일자', '예측가격']
+            )
 
-with col4:
-    apt_df = df[(df['단지명'] == selected_apt) & (df['동이름'] == selected_dong)]
-    area_list = sorted(apt_df['전용면적(㎡)'].unique())
-    
-    def fmt(x): return f"{x}㎡ ({x/3.3058:.1f}평)"
-    selected_area = st.selectbox("4. 평수", area_list, format_func=fmt)
-
-# 분석 대상 데이터
-target_df = apt_df[apt_df['전용면적(㎡)'] == selected_area].sort_values('계약일자')
-
-pyeong_val = selected_area / 3.3058 if selected_area else 0
-st.subheader(f"📍 {selected_apt} {pyeong_val:.1f}평형")
-
-if target_df.empty:
-    st.info("선택된 아파트 정보가 없습니다.")
-elif len(target_df) < 5:
-    st.warning(f"데이터가 부족하여({len(target_df)}건) 차트만 표시합니다.")
-    c = alt.Chart(target_df).mark_circle(size=60).encode(
-        x='계약일자', y=alt.Y('거래금액', scale=alt.Scale(zero=False)), tooltip=['거래금액']
-    ).interactive()
-    st.altair_chart(c, use_container_width=True)
-else:
-    if st.button("🤖 미래 가격 예측 실행"):
-        target_df['date_ord'] = target_df['계약일자'].map(datetime.toordinal)
-        X = target_df[['date_ord']]
-        y = target_df['거래금액']
-        
-        model = LinearRegression()
-        model.fit(X, y)
-        
-        last_date = target_df['계약일자'].max()
-        future_dates = [last_date + pd.Timedelta(days=x) for x in range(15, 180, 15)]
-        future_ord = np.array([d.toordinal() for d in future_dates]).reshape(-1, 1)
-        pred = model.predict(future_ord)
-        
-        future_df = pd.DataFrame({'계약일자': future_dates, '예측가격': pred.astype(int)})
-        
-        # 차트 병합
-        c1 = alt.Chart(target_df).mark_circle(size=60, color='#1f77b4').encode(x='계약일자', y=alt.Y('거래금액', scale=alt.Scale(zero=False)), tooltip=['거래금액'])
-        c2 = alt.Chart(future_df).mark_line(strokeDash=[5,5], color='#ff7f0e').encode(x='계약일자', y='예측가격', tooltip=['예측가격'])
-        
-        st.altair_chart(c1 + c2, use_container_width=True)
-        
-        # 결론 도출
-        diff = future_df.iloc[-1]['예측가격'] - target_df.iloc[-1]['거래금액']
-        msg = "상승" if diff > 0 else "하락"
-        st.success(f"📈 예측 결과: 6개월 뒤 약 {abs(diff)/10000:.2f}억원 {msg}할 것으로 보입니다.")
-    else:
-        c = alt.Chart(target_df).mark_circle(size=60).encode(
-            x='계약일자', y=alt.Y('거래금액', scale=alt.Scale(zero=False)), tooltip=['거래금액']
-        ).interactive()
-        st.altair_chart(c, use_container_width=True)
+            st.success("분석 완료! 빨간 점선이 예상되는 가격 흐름입니다.")
+            st.altair_chart(base_line + pred_line, use_container_width=True)
+            
+            # 텍스트 코멘트
+            current_price = target_df.iloc[-1]['거래금액']
+            future_price = future_df.iloc[-1]['예측가격']
+            diff = future_price - current_price
+            
+            st.markdown("### 📊 AI 분석 리포트")
+            if diff > 0:
+                st.write(f"📈 현재 추세대로라면, 6개월 뒤 약 **{diff/10000:.1f}억원 상승**할 가능성이 보입니다.")
+            else:
+                st.write(f"📉 현재 추세가 꺾이고 있습니다. 6개월 뒤 약 **{abs(diff)/10000:.1f}억원 하락**하거나 조정받을 수 있습니다.")
+                st.info("※ 주의: 이 예측은 과거 데이터의 '추세'만 반영한 결과입니다. 실제 시장 상황(금리 등)에 따라 달라질 수 있습니다.")
