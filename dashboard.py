@@ -10,7 +10,7 @@ st.set_page_config(page_title="울산 부동산 AI 분석기", page_icon="🔮",
 
 st.title("🔮 울산 아파트 시장 동향 & AI 예측")
 st.markdown("""
-**데이터 로드 문제 해결 버전**입니다.
+**데이터 로드 문제 해결 최종 버전**입니다.
 좌측 사이드바에서 파일을 업로드하고, 데이터가 안 보이면 **'설정'**을 조절해보세요.
 """)
 
@@ -22,7 +22,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 파일 읽기 설정")
 st.sidebar.caption("데이터가 깨지거나 에러가 나면 아래 옵션을 변경하세요.")
 
-# [핵심 수정] 파일 형식에 맞춰 사용자가 조절 가능한 옵션
+# 파일 형식에 맞춰 사용자가 조절 가능한 옵션
 skip_rows = st.sidebar.number_input(
     "상단 제외 행 수 (기본값: 15)", 
     min_value=0, 
@@ -78,4 +78,79 @@ with st.expander("🔍 데이터 원본 미리보기 (여기를 눌러 확인)",
     
     # 필수 컬럼 체크
     required_cols = ['시군구', '단지명', '전용면적(㎡)', '계약년월', '계약일', '거래금액(만원)']
-    missing_cols = [col for col in required_cols if col not in raw_
+    
+    # [수정] 코드가 잘리지 않도록 안전하게 작성
+    missing_cols = []
+    for col in required_cols:
+        if col not in raw_df.columns:
+            missing_cols.append(col)
+    
+    if missing_cols:
+        st.error(f"🚨 데이터에서 다음 필수 항목을 찾을 수 없습니다: {missing_cols}")
+        st.write("위의 미리보기 표를 확인하세요. 컬럼명이 첫 번째 줄에 제대로 와있나요?")
+        st.warning("👉 만약 데이터가 첫 줄부터 시작된다면 좌측 **'상단 제외 행 수'를 0**으로 설정하세요.")
+        st.stop()
+    else:
+        st.success("✅ 데이터 형식이 올바릅니다. 분석을 시작합니다.")
+
+# 전처리 수행
+try:
+    df = raw_df.copy()
+    df['거래금액'] = df['거래금액(만원)'].astype(str).str.replace(',', '').astype(int)
+    
+    # 구/군 정보 추출
+    df['구'] = df['시군구'].apply(lambda x: x.split(' ')[1] if len(x.split(' ')) > 1 else '기타')
+    df['동이름'] = df['시군구'].apply(lambda x: x.split(' ')[-1])
+    
+    # 날짜 변환
+    df['계약일자'] = pd.to_datetime(df['계약년월'].astype(str) + df['계약일'].astype(str).str.zfill(2), format='%Y%m%d')
+    
+    # 평수 및 평당가 계산
+    df['평수'] = df['전용면적(㎡)'] / 3.3058
+    df['평당가'] = df['거래금액'] / df['평수']
+    
+except Exception as e:
+    st.error(f"데이터 전처리 중 오류 발생: {e}")
+    st.stop()
+
+st.divider()
+
+# --- [파트 1] 울산 전체 구별 트렌드 ---
+st.header("📊 울산 구별 평당 가격 추이")
+st.markdown("전용면적당 가격(평당가) 흐름을 통해 시장의 큰 흐름을 파악합니다.")
+
+# 월별/구별 데이터 집계
+df['년월'] = df['계약일자'].dt.to_period('M').astype(str)
+trend_df = df.groupby(['년월', '구'])['평당가'].mean().reset_index()
+
+overview_chart = alt.Chart(trend_df).mark_line(point=True).encode(
+    x=alt.X('년월', title='기간', axis=alt.Axis(format='%Y-%m', labelAngle=-45)),
+    y=alt.Y('평당가', title='평당 평균 거래가(만원)', scale=alt.Scale(zero=False)),
+    color=alt.Color('구', title='구/군'),
+    tooltip=['년월', '구', alt.Tooltip('평당가', format=',.0f')]
+).properties(height=350).interactive()
+
+st.altair_chart(overview_chart, use_container_width=True)
+
+# --- [파트 2] 개별 아파트 상세 분석 ---
+st.header("🏢 개별 아파트 상세 분석 & 예측")
+st.markdown("관심 있는 아파트의 특정 평형을 선택하여 **미래 가격**을 예측합니다.")
+
+# 필터링 UI
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    gu_list = sorted(df['구'].unique())
+    selected_gu = st.selectbox("1. 구/군", gu_list)
+
+with c2:
+    dong_list = sorted(df[df['구'] == selected_gu]['동이름'].unique())
+    selected_dong = st.selectbox("2. 동네", dong_list)
+
+with c3:
+    apt_list = sorted(df[df['동이름'] == selected_dong]['단지명'].unique())
+    selected_apt = st.selectbox("3. 아파트", apt_list)
+
+with c4:
+    # 해당 아파트의 평수만 추출
+    area_list = df[(df['동이름'] == selected_dong) & (df['단지명'] == selected_apt)]['전용면적(
