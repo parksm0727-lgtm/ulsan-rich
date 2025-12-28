@@ -8,7 +8,7 @@ from datetime import datetime
 # 1. 페이지 설정
 st.set_page_config(page_title="울산 부동산 AI 분석기", page_icon="🔮", layout="wide")
 
-st.title("🔮 울산 아파트 미래 가격 예측")
+st.title("🔮 전국 아파트 미래 가격 예측")
 st.markdown("과거 데이터를 학습하여 **향후 6개월간의 가격 추세**를 예측합니다.")
 
 # 2. 데이터 로드 (수정 버전)
@@ -118,4 +118,5 @@ else:
                 st.write(f"📉 현재 추세가 꺾이고 있습니다. 6개월 뒤 약 **{abs(diff)/10000:.1f}억원 하락**하거나 조정받을 수 있습니다.")
 
                 st.info("※ 주의: 이 예측은 과거 데이터의 '추세'만 반영한 결과입니다. 실제 시장 상황(금리 등)에 따라 달라질 수 있습니다.")
+
 
