@@ -11,13 +11,27 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 1. 페이지 설정
 st.set_page_config(page_title="전국 아파트 실시간 실거래가", page_icon="📡", layout="wide")
 
-st.title("📡 전국 아파트 실시간 실거래가 조회")
-st.markdown("국토교통부 API를 사용하여 **전국 모든 지역**의 실시간 매매가를 조회합니다.")
+# -----------------------------------------------------------
+# [기능 0] 반응형 타이틀 (화면 크기에 따라 폰트 자동 조절)
+# -----------------------------------------------------------
+# clamp(최소크기, 선호크기, 최대크기) 함수를 사용하여 크기 자동 조절
+st.markdown("""
+    <h1 style='
+        font-size: clamp(1.8rem, 5vw, 3.5rem); 
+        font-weight: 700; 
+        margin-bottom: 10px;
+        white-space: nowrap;
+    '>
+        📡 전국 아파트 실시간 실거래가
+    </h1>
+    <p style='font-size: 1rem; margin-bottom: 30px; color: gray;'>
+        국토교통부 API를 사용하여 <b>전국 모든 지역</b>의 실시간 매매가를 조회합니다.
+    </p>
+    """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------
-# [기능 1] 전국 행정구역 코드 데이터 (광역시도 & 시군구)
+# [기능 1] 전국 행정구역 코드 데이터
 # -----------------------------------------------------------
-# 너무 길어지지 않게 주요 코드를 정리했습니다. 필요하면 더 추가할 수 있습니다.
 korea_regions = {
     "서울특별시": {
         "강남구": "11680", "강동구": "11740", "강북구": "11305", "강서구": "11500", "관악구": "11620",
@@ -193,7 +207,7 @@ def fetch_data(api_key, lawd_cd, deal_ymd):
 # -----------------------------------------------------------
 # [기능 4] 메인 로직 (조회 버튼 및 결과 처리)
 # -----------------------------------------------------------
-if st.sidebar.button("🚀 데이터 조회하기 (3단계 동/면 선택)"):
+if st.sidebar.button("🚀 데이터 조회하기 (3~4단계 필터 활성화)"):
     st.session_state['search_clicked'] = True
     st.session_state['search_params'] = (lawd_cd, deal_ymd, selected_si_do, selected_gu_gun)
 
@@ -237,43 +251,66 @@ if st.session_state.get('search_clicked'):
                 df['평수'] = df['전용면적_숫자'] / 3.3058
 
                 # -----------------------------------------------------------
-                # [기능 5] 3단계: 동/면 선택 (데이터 기반 필터링)
+                # [기능 5] 상세 필터 (동/면 -> 아파트)
                 # -----------------------------------------------------------
                 st.sidebar.markdown("---")
-                st.sidebar.subheader("📍 3. 상세 지역 (동/면) 선택")
+                st.sidebar.subheader("📍 상세 필터")
                 
-                # 데이터에 있는 실제 법정동만 추출하여 목록 생성
+                # --- 3단계: 동/면 선택 ---
+                dong_list = ["전체 보기"]
                 if '법정동' in df.columns:
-                    dong_list = sorted(df['법정동'].unique())
-                    dong_list.insert(0, "전체 보기")
-                    
-                    selected_dong = st.sidebar.selectbox("동/면을 선택하세요", dong_list)
-                    
-                    # 필터링
-                    if selected_dong != "전체 보기":
-                        df = df[df['법정동'] == selected_dong]
-                        st.info(f"📍 {si_name} {gu_name} **{selected_dong}** 내역을 표시합니다.")
-                    else:
-                        st.success(f"✅ {si_name} {gu_name} **전체** 내역을 표시합니다.")
+                    dong_list += sorted(df['법정동'].unique())
                 
+                selected_dong = st.sidebar.selectbox("3. 동/면 선택", dong_list)
+                
+                # 동 필터링 적용
+                if selected_dong != "전체 보기":
+                    df_filtered = df[df['법정동'] == selected_dong]
+                else:
+                    df_filtered = df
+
+                # --- 4단계: 아파트 선택 ---
+                # 선택된 동에 있는 아파트만 리스트에 표시
+                apt_list = ["전체 보기"]
+                if '아파트' in df_filtered.columns:
+                    apt_list += sorted(df_filtered['아파트'].unique())
+                    
+                selected_apt = st.sidebar.selectbox("4. 아파트 선택", apt_list)
+
+                # 아파트 필터링 적용
+                if selected_apt != "전체 보기":
+                    df_final = df_filtered[df_filtered['아파트'] == selected_apt]
+                else:
+                    df_final = df_filtered
+
                 # -----------------------------------------------------------
-                # [기능 6] 결과 시각화
+                # [기능 6] 결과 메시지 및 시각화
                 # -----------------------------------------------------------
-                if not df.empty:
+                
+                # 현재 보고 있는 데이터가 어떤 조건인지 표시
+                filter_info = f"{si_name} {gu_name}"
+                if selected_dong != "전체 보기":
+                    filter_info += f" > {selected_dong}"
+                if selected_apt != "전체 보기":
+                    filter_info += f" > {selected_apt}"
+                
+                st.success(f"✅ **{filter_info}** 검색 결과: 총 {len(df_final)}건")
+
+                if not df_final.empty:
                     # 요약
                     c1, c2, c3 = st.columns(3)
-                    avg_p = df['거래금액_숫자'].mean()
-                    max_p = df['거래금액_숫자'].max()
+                    avg_p = df_final['거래금액_숫자'].mean()
+                    max_p = df_final['거래금액_숫자'].max()
                     c1.metric("평균 거래가", f"{avg_p/10000:.1f}억원")
                     c2.metric("최고 거래가", f"{max_p/10000:.1f}억원")
-                    top_apt = df['아파트'].mode()[0] if not df['아파트'].mode().empty else "-"
-                    c3.metric("최다 거래 아파트", top_apt)
+                    top_apt = df_final['아파트'].mode()[0] if not df_final['아파트'].mode().empty else "-"
+                    c3.metric("최다 거래", top_apt)
                     
                     st.divider()
                     
                     # 차트
-                    st.subheader(f"📊 {selected_dong if 'selected_dong' in locals() and selected_dong != '전체 보기' else gu_name} 거래 흐름")
-                    chart = alt.Chart(df).mark_circle(size=80).encode(
+                    st.subheader(f"📊 거래 흐름 ({selected_apt if selected_apt != '전체 보기' else '전체'})")
+                    chart = alt.Chart(df_final).mark_circle(size=80).encode(
                         x=alt.X('계약일', title='날짜'),
                         y=alt.Y('거래금액_숫자', title='거래금액(만원)', scale=alt.Scale(zero=False)),
                         color=alt.Color('법정동', title='법정동', legend=None),
@@ -285,7 +322,7 @@ if st.session_state.get('search_clicked'):
                     st.subheader("📋 상세 거래 내역")
                     cols = ['계약일', '법정동', '아파트', '전용면적', '거래금액', '층']
                     st.dataframe(
-                        df[cols].sort_values('계약일', ascending=False), 
+                        df_final[cols].sort_values('계약일', ascending=False), 
                         use_container_width=True
                     )
                 else:
